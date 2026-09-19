@@ -136,7 +136,6 @@ def initialize_state():
     defaults = {
         "analysis_done": False,
         "analysis_results": [],
-        "accepted_revisions": {},
         "uploaded_text": "",
         "extraction_method": "",
         "last_file_name": "",
@@ -1237,316 +1236,6 @@ def select_revision_verb(
     return "explain"
 
 
-# ============================================================
-# REVISION GENERATOR
-# ============================================================
-
-def preserve_mcq_options(original: str) -> str:
-    options = re.findall(
-        r"(?im)^\s*(?:[A-Da-d][\.\)])\s+.+$",
-        original
-    )
-
-    if not options:
-        return ""
-
-    return "\n" + "\n".join(
-        option.strip()
-        for option in options
-    )
-
-
-def generate_revision(
-    question: str,
-    best_clo: str,
-    best_plo: str,
-    course: str
-) -> Tuple[str, str, str]:
-
-    target = best_clo or best_plo
-
-    concepts = extract_core_concepts(
-        target
-    )
-
-    question_type = detect_question_type(
-        question
-    )
-
-    verb = select_revision_verb(
-        target,
-        question
-    )
-
-    concept_text = ""
-
-    if concepts:
-        if len(concepts) == 1:
-            concept_text = concepts[0]
-        elif len(concepts) == 2:
-            concept_text = f"{concepts[0]} and {concepts[1]}"
-        else:
-            concept_text = (
-                ", ".join(concepts[:-1])
-                + ", and "
-                + concepts[-1]
-            )
-
-    original_core = clean_question_candidate(
-        question
-    )
-
-    # Remove MCQ options before rewriting.
-    original_without_options = re.sub(
-        r"(?im)^\s*[A-Da-d][\.\)]\s+.*$",
-        "",
-        original_core
-    )
-
-    original_without_options = clean_text(
-        original_without_options
-    )
-
-    # Specific, practical revision patterns.
-    if question_type == "Numerical / Problem":
-        revised = original_without_options
-
-        if concept_text:
-            if re.search(
-                r"\bcalculate\b",
-                revised,
-                flags=re.IGNORECASE
-            ):
-                revised = (
-                    revised.rstrip(".? ")
-                    + f", and state the result for {concept_text}."
-                )
-            else:
-                revised = (
-                    revised.rstrip(".? ")
-                    + f". Apply the relevant principles of {concept_text} "
-                    "and show the calculation steps."
-                )
-
-    elif question_type == "Case / Application":
-        if concept_text:
-            revised = (
-                f"Analyze the case using {concept_text} "
-                "and recommend an appropriate solution."
-            )
-        else:
-            revised = original_without_options
-
-    elif question_type == "Practical / Design":
-        if concept_text:
-            revised = (
-                f"{verb.capitalize()} a practical solution involving "
-                f"{concept_text} and briefly justify your approach."
-            )
-        else:
-            revised = original_without_options
-
-    elif verb in {"analyze", "analyse"}:
-        revised = (
-            f"Analyze {concept_text} and explain the key factors, "
-            "relationships, or effects involved."
-        )
-
-    elif verb in {"evaluate", "assess", "critique"}:
-        revised = (
-            f"Evaluate {concept_text} and justify your conclusion "
-            "using relevant evidence or criteria."
-        )
-
-    elif verb in {"compare", "differentiate"}:
-        revised = (
-            f"Compare and differentiate {concept_text}, "
-            "highlighting the key similarities and differences."
-        )
-
-    elif verb in {"apply", "demonstrate"}:
-        revised = (
-            f"Apply the relevant principles of {concept_text} "
-            "to the given situation and show how they are used."
-        )
-
-    elif verb in {"design", "develop", "create", "construct", "formulate"}:
-        revised = (
-            f"{verb.capitalize()} a practical solution involving "
-            f"{concept_text} and explain the main features of your solution."
-        )
-
-    elif verb in {"calculate", "solve"}:
-        revised = original_without_options
-
-        if concept_text:
-            revised = (
-                revised.rstrip(".? ")
-                + f" using the relevant principles of {concept_text}, "
-                "showing the calculation steps."
-            )
-
-    elif verb == "identify":
-        revised = (
-            f"Identify the key elements of {concept_text} "
-            "and briefly state their significance."
-        )
-
-    elif verb == "describe":
-        revised = (
-            f"Describe {concept_text}, including its main features "
-            "and significance."
-        )
-
-    else:
-        if concept_text:
-            revised = (
-                f"Explain {concept_text} and describe its "
-                "main features or significance."
-            )
-        else:
-            revised = original_without_options
-
-    # Preserve options where present.
-    options = preserve_mcq_options(
-        question
-    )
-
-    if options:
-        # For MCQs, keep original stem when possible and strengthen it.
-        if concept_text:
-            revised = (
-                f"Which option best demonstrates or explains "
-                f"{concept_text}?"
-            )
-
-            revised += options
-
-    # Never allow outcome language to leak into student question.
-    banned_phrases = [
-        "according to the clo",
-        "according to the plo",
-        "learning outcome",
-        "course learning outcome",
-        "program learning outcome",
-        "as stated in the clo",
-        "as stated in the plo",
-        "using the clo",
-        "using the plo",
-    ]
-
-    for phrase in banned_phrases:
-        revised = re.sub(
-            re.escape(phrase),
-            "",
-            revised,
-            flags=re.IGNORECASE
-        )
-
-    revised = clean_text(revised)
-
-    if not revised.endswith("?") and question_type not in {
-        "Numerical / Problem",
-        "Practical / Design",
-    }:
-        revised += "?"
-
-    problem = identify_problem(
-        question,
-        best_clo,
-        best_plo
-    )
-
-    focus = identify_revision_focus(
-        question,
-        best_clo,
-        best_plo
-    )
-
-    return revised, problem, focus
-
-
-def identify_problem(
-    question: str,
-    clo: str,
-    plo: str
-) -> str:
-
-    problems = []
-
-    if clo:
-        clo_score = overlap_score(
-            question,
-            clo
-        )
-
-        if clo_score < 20:
-            problems.append(
-                "The question does not sufficiently address the required content or skill."
-            )
-        elif clo_score < 35:
-            problems.append(
-                "The question addresses the topic only partially."
-            )
-
-    if plo:
-        plo_score = overlap_score(
-            question,
-            plo
-        )
-
-        if plo_score < 20:
-            problems.append(
-                "The question has limited connection with the intended broader skill."
-            )
-
-    bloom_name, bloom_level = detect_bloom(
-        question
-    )
-
-    if bloom_level <= 2 and (
-        "analy" in (clo + plo).lower()
-        or "evaluat" in (clo + plo).lower()
-        or "apply" in (clo + plo).lower()
-    ):
-        problems.append(
-            f"The cognitive demand is currently {bloom_name}, "
-            "while the intended task requires a higher level of thinking."
-        )
-
-    if not problems:
-        problems.append(
-            "The question needs a more direct connection to the intended knowledge or skill."
-        )
-
-    return " ".join(problems)
-
-
-def identify_revision_focus(
-    question: str,
-    clo: str,
-    plo: str
-) -> str:
-
-    target = clo or plo
-
-    concepts = extract_core_concepts(
-        target
-    )
-
-    if concepts:
-        return (
-            "Integrate the specific subject concepts or skills required "
-            "by the assessment objective: "
-            + ", ".join(concepts)
-            + "."
-        )
-
-    return (
-        "Strengthen the question so that it directly measures "
-        "the intended subject knowledge or skill."
-    )
-
 
 # ============================================================
 # COMPLETE QUESTION ANALYSIS
@@ -1650,18 +1339,6 @@ def analyze_question(
         )
     )
 
-    revised_question = ""
-    problem = ""
-    focus = ""
-
-    if needs_revision:
-        revised_question, problem, focus = generate_revision(
-            question,
-            best_clo,
-            best_plo,
-            course
-        )
-
     return {
         "Question": question,
         "Question Type": detect_question_type(question),
@@ -1687,64 +1364,10 @@ def analyze_question(
         "Best PLO": best_plo,
         "CLO Evidence": clo_evidence,
         "PLO Evidence": plo_evidence,
-        "Revision": revised_question,
         "Problem": problem,
         "Revision Focus": focus,
-        "Accepted": False,
     }
 
-
-# ============================================================
-# RESCORE REVISED QUESTION
-# ============================================================
-
-def rescore_revision(
-    original_result: Dict,
-    revised_question: str,
-    course: str,
-    clos: List[str],
-    plos: List[str]
-) -> Dict:
-
-    revised_result = analyze_question(
-        revised_question,
-        course,
-        clos,
-        plos
-    )
-
-    # Revisions must not contain outcome language.
-    forbidden = [
-        "clo",
-        "plo",
-        "learning outcome",
-        "learning objective",
-    ]
-
-    lowered = revised_question.lower()
-
-    if any(
-        phrase in lowered
-        for phrase in forbidden
-    ):
-        # Remove accidental outcome references by reverting
-        # to a safer direct question.
-        revised_question = original_result["Question"]
-
-        revised_result = analyze_question(
-            revised_question,
-            course,
-            clos,
-            plos
-        )
-
-    revised_result["Question"] = revised_question
-    revised_result["Original Question"] = (
-        original_result["Question"]
-    )
-    revised_result["Accepted"] = True
-
-    return revised_result
 
 
 # ============================================================
@@ -2059,7 +1682,6 @@ if analyze_button:
 
             st.session_state.analysis_done = True
             st.session_state.analysis_results = results
-            st.session_state.accepted_revisions = {}
             st.session_state.uploaded_text = text
             st.session_state.extraction_method = method
             st.session_state.last_file_name = uploaded_file.name
@@ -2093,15 +1715,6 @@ if st.session_state.analysis_done:
 
     results = st.session_state.analysis_results
 
-    # --------------------------------------------------------
-    # APPLY ACCEPTED REVISIONS
-    # --------------------------------------------------------
-
-    for index, accepted in (
-        st.session_state.accepted_revisions.items()
-    ):
-        if 0 <= index < len(results):
-            results[index] = accepted
 
     # --------------------------------------------------------
     # OVERALL SCORE
@@ -2163,7 +1776,7 @@ if st.session_state.analysis_done:
             )
 
     # --------------------------------------------------------
-    # REVISION LIST AT TOP
+    # QUESTIONS REQUIRING REVIEW
     # --------------------------------------------------------
 
     revision_items = [
@@ -2175,13 +1788,13 @@ if st.session_state.analysis_done:
 
     if revision_items:
 
-        st.header("4. Questions Requiring Revision")
+        st.header("4. Questions Requiring Review")
 
         st.info(
             "The questions below are below the 75% attainment "
-            "threshold. The tool has generated practical "
-            "revisions. Click **Use This Revision** to replace "
-            "the original question and recalculate its score."
+            "threshold. Review the identified problem and revision "
+            "focus manually. The tool does not generate replacement "
+            "questions or question suggestions."
         )
 
         for index, result in revision_items:
@@ -2216,46 +1829,8 @@ if st.session_state.analysis_done:
                     result["Revision Focus"]
                 )
 
-                st.markdown("**Practical Revision**")
-
-                st.info(
-                    result["Revision"]
-                )
-
-                button_key = (
-                    f"use_revision_{index}_"
-                    f"{hash(result['Revision'])}"
-                )
-
-                if st.button(
-                    "✓ Use This Revision",
-                    key=button_key,
-                    type="primary"
-                ):
-
-                    revised_result = rescore_revision(
-                        result,
-                        result["Revision"],
-                        course,
-                        clos,
-                        plos
-                    )
-
-                    # Preserve question number.
-                    revised_result["Number"] = number
-
-                    st.session_state.accepted_revisions[
-                        index
-                    ] = revised_result
-
-                    st.session_state.analysis_results[
-                        index
-                    ] = revised_result
-
-                    st.rerun()
-
     else:
-        st.header("4. Revision Status")
+        st.header("4. Review Status")
 
         st.success(
             "🟢 All analyzed questions have attained "
@@ -2300,12 +1875,6 @@ if st.session_state.analysis_done:
                 st.write(
                     result["Question"]
                 )
-
-                if result.get("Accepted"):
-                    st.caption(
-                        "✓ Revised question accepted and "
-                        "rescored successfully."
-                    )
 
     # --------------------------------------------------------
     # ALIGNMENT OVERVIEW
@@ -2533,11 +2102,6 @@ if st.session_state.analysis_done:
                     + result["PLO Evidence"]
                 )
 
-            if result.get("Accepted"):
-                st.success(
-                    "✓ This revised question has been accepted."
-                )
-
     # --------------------------------------------------------
     # EXPORT
     # --------------------------------------------------------
@@ -2590,11 +2154,6 @@ if st.session_state.analysis_done:
                 "Status": result.get(
                     "Status",
                     ""
-                ),
-                "Accepted Revision": (
-                    "Yes"
-                    if result.get("Accepted")
-                    else "No"
                 ),
             }
         )
