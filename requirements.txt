@@ -1,6 +1,10 @@
 streamlit
 pandas
+PyMuPDF
+pypdf
+pdfplumber
+python-docx
+python-pptx
 openpyxl
-xlsxwriter
-plotly
-reportlab
+Pillow
+pytesseract
